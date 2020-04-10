@@ -1,9 +1,18 @@
 import * as React from 'react';
-import { View, Text, StyleSheet, StyleProp, ViewStyle } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  StyleProp,
+  ViewStyle,
+  TextStyle,
+} from 'react-native';
+import { Theme } from '../../types';
+import { withTheme } from '../../core/theming';
 import { RadioButtonContext, RadioButtonContextType } from './RadioButtonGroup';
 import { handlePress } from './utils';
 import TouchableRipple from '../TouchableRipple';
 import RadioButton from './RadioButton';
+import Text from '../Typography/Text';
 
 export type Props = {
   /**
@@ -23,9 +32,17 @@ export type Props = {
    */
   status?: 'checked' | 'unchecked';
   /**
-   * Additional styles for container View
+   * Additional styles for container View.
    */
   style?: StyleProp<ViewStyle>;
+  /**
+   * Style that is passed to Label element.
+   */
+  labelStyle?: StyleProp<TextStyle>;
+  /**
+   * @optional
+   */
+  theme: Theme;
 };
 
 /**
@@ -60,7 +77,15 @@ class RadioButtonItem extends React.Component<Props> {
   static displayName = 'RadioButton.Item';
 
   render() {
-    const { value, label, style, onPress, status } = this.props;
+    const {
+      value,
+      label,
+      style,
+      labelStyle,
+      onPress,
+      status,
+      theme: { colors },
+    } = this.props;
 
     return (
       <RadioButtonContext.Consumer>
@@ -76,7 +101,11 @@ class RadioButtonItem extends React.Component<Props> {
               }
             >
               <View style={[styles.container, style]} pointerEvents="none">
-                <Text>{label}</Text>
+                <Text
+                  style={[styles.label, labelStyle, { color: colors.primary }]}
+                >
+                  {label}
+                </Text>
                 <RadioButton value={value} status={status}></RadioButton>
               </View>
             </TouchableRipple>
@@ -87,7 +116,10 @@ class RadioButtonItem extends React.Component<Props> {
   }
 }
 
-export default RadioButtonItem;
+export default withTheme(RadioButtonItem);
+
+// @component-docs ignore-next-line
+export { RadioButtonItem };
 
 const styles = StyleSheet.create({
   container: {
@@ -96,5 +128,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 8,
     paddingHorizontal: 16,
+  },
+  label: {
+    fontSize: 16,
   },
 });
