@@ -409,6 +409,10 @@ class TextInput extends React.Component<TextInputProps, State> {
     });
   };
 
+  forceFocus = () => {
+    return this.root?.focus();
+  };
+
   /**
    * @internal
    */
@@ -443,7 +447,6 @@ class TextInput extends React.Component<TextInputProps, State> {
   blur() {
     return this.root && this.root.blur();
   }
-
   render() {
     const { mode, ...rest } = this.props as $Omit<TextInputProps, 'ref'>;
 
@@ -456,6 +459,7 @@ class TextInput extends React.Component<TextInputProps, State> {
           this.root = ref;
         }}
         onFocus={this.handleFocus}
+        forceFocus={this.forceFocus}
         onBlur={this.handleBlur}
         onChangeText={this.handleChangeText}
         onLayoutAnimatedText={this.handleLayoutAnimatedText}
@@ -471,6 +475,7 @@ class TextInput extends React.Component<TextInputProps, State> {
           this.root = ref;
         }}
         onFocus={this.handleFocus}
+        forceFocus={this.forceFocus}
         onBlur={this.handleBlur}
         onChangeText={this.handleChangeText}
         onLayoutAnimatedText={this.handleLayoutAnimatedText}
