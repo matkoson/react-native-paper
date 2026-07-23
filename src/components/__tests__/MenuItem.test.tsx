@@ -1,10 +1,20 @@
-import { describe, expect, it } from '@jest/globals';
+import { Animated } from 'react-native';
+
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { getTheme } from '../../core/theming';
 import { render, screen } from '../../test-utils';
 import { tokens } from '../../theme/tokens';
+import { resolveCornerRadius } from '../../theme/utils/shape';
 import Menu from '../Menu/Menu';
-import { getMenuItemColor } from '../Menu/utils';
+import { runMenuCloseMotion, runMenuOpenMotion } from '../Menu/motion';
+import { MenuTokens } from '../Menu/tokens';
+import {
+  getMenuContainerBorderRadius,
+  getMenuContainerColor,
+  getMenuItemBorderRadius,
+  getMenuItemColor,
+} from '../Menu/utils';
 
 const stateOpacity = tokens.md.sys.state.opacity;
 
@@ -61,6 +71,123 @@ describe('Menu Item', () => {
       expect.objectContaining({ checked: true })
     );
   });
+
+  it('uses labelLarge for the title', async () => {
+    await render(<Menu.Item title="Paste" />);
+
+    expect(screen.getByTestId('menu-item-title')).toHaveStyle(
+      getTheme().fonts.labelLarge
+    );
+  });
+
+  it('renders supporting and trailing supporting text', async () => {
+    const theme = getTheme();
+    await render(
+      <Menu.Item
+        title="Share"
+        supportingText="Send a link"
+        trailingSupportingText="⌘S"
+        aria-label="Share, send a link, keyboard shortcut Command S"
+      />
+    );
+
+    expect(screen.getByTestId('menu-item-supporting')).toHaveTextContent(
+      'Send a link'
+    );
+    expect(
+      screen.getByTestId('menu-item-trailing-supporting')
+    ).toHaveTextContent('⌘S');
+    // two-line anatomy must not use fixed 48 height (would clip supporting)
+    expect(screen.getByTestId('menu-item')).toHaveStyle({
+      minHeight: 48,
+      paddingVertical: 8,
+    });
+    // B2: supporting uses bodySmall + onSurfaceVariant
+    expect(screen.getByTestId('menu-item-supporting')).toHaveStyle({
+      ...theme.fonts.bodySmall,
+      color: theme.colors.onSurfaceVariant,
+    });
+    // B3: trailing supporting uses labelLarge
+    expect(screen.getByTestId('menu-item-trailing-supporting')).toHaveStyle({
+      ...theme.fonts.labelLarge,
+      color: theme.colors.onSurfaceVariant,
+    });
+    // Supporting + trailing content is user-visible; explicit aria-label stays on the menuitem
+    expect(screen.getByText('Send a link')).toBeOnTheScreen();
+    expect(screen.getByText('⌘S')).toBeOnTheScreen();
+    expect(
+      screen.getByRole('menuitem', {
+        name: 'Share, send a link, keyboard shortcut Command S',
+      })
+    ).toBeOnTheScreen();
+  });
+
+  it('keeps fixed height for single-line items', async () => {
+    await render(<Menu.Item title="Paste" />);
+    expect(screen.getByTestId('menu-item')).toHaveStyle({ height: 48 });
+  });
+
+  it('uses dense item height of 32 when dense', async () => {
+    await render(<Menu.Item title="Share" dense />);
+    expect(screen.getByTestId('menu-item')).toHaveStyle({
+      height: MenuTokens.sizes.denseItemHeight,
+      minHeight: MenuTokens.sizes.denseItemHeight,
+    });
+    expect(MenuTokens.sizes.denseItemHeight).toBe(32);
+  });
+
+  it('applies selected colors and aria-selected', async () => {
+    const theme = getTheme();
+    await render(<Menu.Item title="Paste" selected />);
+
+    expect(screen.getByRole('menuitem')).toHaveProp(
+      'accessibilityState',
+      expect.objectContaining({ selected: true })
+    );
+    expect(screen.getByTestId('menu-item')).toHaveStyle({
+      backgroundColor: theme.colors.tertiaryContainer,
+    });
+    expect(screen.getByTestId('menu-item-title')).toHaveStyle({
+      color: theme.colors.onTertiaryContainer,
+    });
+  });
+
+  it('disabled wins over selected for content opacity', async () => {
+    await render(<Menu.Item title="Paste" selected disabled />);
+
+    expect(screen.getByRole('menuitem')).toHaveProp(
+      'accessibilityState',
+      expect.objectContaining({ disabled: true })
+    );
+    // selected container is suppressed when disabled
+    expect(screen.getByTestId('menu-item')).not.toHaveStyle({
+      backgroundColor: getTheme().colors.tertiaryContainer,
+    });
+    // I3: rendered content row must apply disabled opacity from the real path
+    expect(screen.getByTestId('menu-item-content')).toHaveStyle({
+      opacity: stateOpacity.disabled,
+    });
+  });
+
+  it('applies rendered disabled opacity on the content row', async () => {
+    await render(<Menu.Item title="Cut" disabled />);
+    expect(screen.getByTestId('menu-item-content')).toHaveStyle({
+      opacity: stateOpacity.disabled,
+    });
+  });
+
+  it('applies corner.medium on all sides when selected', async () => {
+    const theme = getTheme();
+    const radius = resolveCornerRadius(theme, MenuTokens.shapes.item);
+
+    await render(
+      <Menu.Item title="Paste" selected roundedTop roundedBottom={false} />
+    );
+
+    expect(screen.getByTestId('menu-item')).toHaveStyle({
+      borderRadius: radius,
+    });
+  });
 });
 
 describe('getMenuItemColor - title color', () => {
@@ -83,6 +210,36 @@ describe('getMenuItemColor - title color', () => {
       })
     ).toMatchObject({
       titleColor: getTheme().colors.onSurface,
+    });
+  });
+
+  it('returns selected tertiary roles when selected', () => {
+    const theme = getTheme();
+    expect(
+      getMenuItemColor({
+        theme,
+        selected: true,
+      })
+    ).toMatchObject({
+      titleColor: theme.colors.onTertiaryContainer,
+      iconColor: theme.colors.onTertiaryContainer,
+      containerColor: theme.colors.tertiaryContainer,
+      contentOpacity: stateOpacity.enabled,
+    });
+  });
+
+  it('ignores selected colors when disabled', () => {
+    const theme = getTheme();
+    expect(
+      getMenuItemColor({
+        theme,
+        selected: true,
+        disabled: true,
+      })
+    ).toMatchObject({
+      titleColor: theme.colors.onSurface,
+      containerColor: undefined,
+      contentOpacity: stateOpacity.disabled,
     });
   });
 });
@@ -108,5 +265,140 @@ describe('getMenuItemColor - icon color', () => {
     ).toMatchObject({
       iconColor: getTheme().colors.onSurfaceVariant,
     });
+  });
+});
+
+describe('Menu shape tokens', () => {
+  it('resolves container border radius to corner.large', () => {
+    const theme = getTheme();
+    expect(getMenuContainerBorderRadius(theme)).toBe(
+      resolveCornerRadius(theme, MenuTokens.shapes.container)
+    );
+    expect(getMenuContainerBorderRadius(theme)).toBe(theme.shapes.corner.large);
+  });
+
+  it('resolves standard container fill to surfaceContainerLow (C1)', () => {
+    const theme = getTheme();
+    expect(getMenuContainerColor({ theme, elevation: 2 })).toBe(
+      theme.colors.surfaceContainerLow
+    );
+    expect(getMenuContainerColor({ theme, elevation: 2 })).not.toBe(
+      theme.colors.elevation.level2
+    );
+    expect(MenuTokens.standardColors.container).toBe('surfaceContainerLow');
+  });
+
+  it('applies corner.medium on selected items', () => {
+    const theme = getTheme();
+    const radius = resolveCornerRadius(theme, MenuTokens.shapes.item);
+    expect(getMenuItemBorderRadius({ theme, selected: true })).toMatchObject({
+      borderRadius: radius,
+    });
+  });
+
+  it('applies top/bottom corner.medium for first/last items', () => {
+    const theme = getTheme();
+    const radius = resolveCornerRadius(theme, MenuTokens.shapes.item);
+    expect(getMenuItemBorderRadius({ theme, roundedTop: true })).toMatchObject({
+      borderTopLeftRadius: radius,
+      borderTopRightRadius: radius,
+      borderBottomLeftRadius: 0,
+      borderBottomRightRadius: 0,
+    });
+    expect(
+      getMenuItemBorderRadius({ theme, roundedBottom: true })
+    ).toMatchObject({
+      borderBottomLeftRadius: radius,
+      borderBottomRightRadius: radius,
+    });
+  });
+
+  it('uses full corner.medium when selected even if only roundedTop was set', () => {
+    const theme = getTheme();
+    const radius = resolveCornerRadius(theme, MenuTokens.shapes.item);
+    expect(
+      getMenuItemBorderRadius({
+        theme,
+        selected: true,
+        roundedTop: true,
+        roundedBottom: false,
+      })
+    ).toMatchObject({ borderRadius: radius });
+  });
+});
+
+describe('Menu open/close motion (I6 / D2)', () => {
+  it('snaps scale and opacity when reduce-motion is enabled', () => {
+    const theme = getTheme();
+    const scale = new Animated.ValueXY({ x: 0, y: 0 });
+    const opacity = new Animated.Value(0);
+    const springSpy = jest.spyOn(Animated, 'spring');
+    const finish = jest.fn();
+
+    const path = runMenuOpenMotion({
+      reduceMotion: true,
+      scaleAnimation: scale,
+      opacityAnimation: opacity,
+      menuWidth: 200,
+      menuHeight: 100,
+      theme,
+      onFinish: finish,
+    });
+
+    expect(path).toBe('snap');
+    expect(springSpy).not.toHaveBeenCalled();
+    expect(finish).toHaveBeenCalled();
+    // Concrete snap values on the real Animated drivers Menu uses
+
+    expect((opacity as unknown as { _value: number })._value).toBe(1);
+
+    expect((scale.x as unknown as { _value: number })._value).toBe(200);
+
+    expect((scale.y as unknown as { _value: number })._value).toBe(100);
+
+    springSpy.mockRestore();
+  });
+
+  it('uses spring when reduce-motion is off', () => {
+    const theme = getTheme();
+    const scale = new Animated.ValueXY({ x: 0, y: 0 });
+    const opacity = new Animated.Value(0);
+    const springSpy = jest.spyOn(Animated, 'spring');
+    const finish = jest.fn();
+
+    const path = runMenuOpenMotion({
+      reduceMotion: false,
+      scaleAnimation: scale,
+      opacityAnimation: opacity,
+      menuWidth: 200,
+      menuHeight: 100,
+      theme,
+      onFinish: finish,
+    });
+
+    expect(path).toBe('spring');
+    expect(springSpy).toHaveBeenCalled();
+    springSpy.mockRestore();
+  });
+
+  it('snaps opacity to 0 on close when reduce-motion is enabled', () => {
+    const theme = getTheme();
+    const opacity = new Animated.Value(1);
+    const springSpy = jest.spyOn(Animated, 'spring');
+    const finish = jest.fn();
+
+    const path = runMenuCloseMotion({
+      reduceMotion: true,
+      opacityAnimation: opacity,
+      theme,
+      onFinish: finish,
+    });
+
+    expect(path).toBe('snap');
+    expect(springSpy).not.toHaveBeenCalled();
+    expect(finish).toHaveBeenCalled();
+
+    expect((opacity as unknown as { _value: number })._value).toBe(0);
+    springSpy.mockRestore();
   });
 });

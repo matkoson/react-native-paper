@@ -2,7 +2,6 @@ import * as React from 'react';
 import {
   Animated,
   Dimensions,
-  Easing,
   Keyboard,
   Platform,
   ScrollView,
@@ -22,9 +21,15 @@ import type {
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { composeMenuChildren } from './composeMenuChildren';
+import { MenuRootContext } from './context';
 import MenuItem from './MenuItem';
+import { runMenuCloseMotion, runMenuOpenMotion } from './motion';
+import { MenuTokens, type MenuColorScheme } from './tokens';
+import { getMenuContainerBorderRadius, getMenuContainerColor } from './utils';
 import { useLocale } from '../../core/locale';
 import { useInternalTheme } from '../../core/theming';
+import { useReduceMotion } from '../../theme/accessibility/ReduceMotionContext';
 import type { Elevation, Theme, ThemeProp } from '../../types';
 import { addEventListener } from '../../utils/addEventListener';
 import { BackHandler } from '../../utils/BackHandler/BackHandler';
@@ -70,18 +75,27 @@ export type Props = {
   contentStyle?: Animated.WithAnimatedValue<StyleProp<ViewStyle>>;
   style?: StyleProp<ViewStyle>;
   /**
-   * Elevation level of the menu's content. Shadow styles are calculated based on this value. Default `backgroundColor` is taken from the corresponding `theme.colors.elevation` property. By default equals `2`.
+   * Elevation level of the menu's content. Controls shadow only.
+   * Default fill is MD3 `surfaceContainerLow` (standard scheme) regardless of
+   * elevation — Paper's `elevation.levelN` tones are not the same as that role.
+   * By default equals `2`.
    * @supported Available in v5.x with theme version 3
    */
   elevation?: Elevation;
   /**
    * Mode of the menu's content.
-   * - `elevated` - Surface with a shadow and background color corresponding to set `elevation` value.
-   * - `flat` - Surface without a shadow, with the background color corresponding to set `elevation` value.
+   * - `elevated` - Surface with a shadow; fill from MD3 menu container role.
+   * - `flat` - Surface without a shadow; same fill role.
    *
    * @supported Available in v5.x with theme version 3
    */
   mode?: 'flat' | 'elevated';
+  /**
+   * Color scheme for the menu surface and its items.
+   * - `standard` (default) — `surfaceContainerLow` fill + onSurface content
+   * - `vibrant` — M3 Expressive tertiary roles
+   */
+  colorScheme?: MenuColorScheme;
   /**
    * @optional
    */
@@ -97,15 +111,11 @@ export type Props = {
 };
 
 // Minimum padding between the edge of the screen and the menu
-const SCREEN_INDENT = 8;
-// From https://material.io/design/motion/speed.html#duration
-const ANIMATION_DURATION = 250;
-// From the 'Standard easing' section of https://material.io/design/motion/speed.html#easing
-const EASING = Easing.bezier(0.4, 0, 0.2, 1);
+const SCREEN_INDENT = MenuTokens.sizes.screenIndent;
 
 const WINDOW_LAYOUT = Dimensions.get('window');
 
-const DEFAULT_ELEVATION: Elevation = 2;
+const DEFAULT_ELEVATION: Elevation = MenuTokens.elevation.default;
 const DEFAULT_MODE = 'elevated';
 
 const focusFirstDOMNode = (el: View | null | undefined) => {
@@ -132,6 +142,10 @@ const isBrowser = () => Platform.OS === 'web' && 'document' in global;
 /**
  * Menus display a list of choices on temporary elevated surfaces. Their placement varies based on the element that opens them.
  *
+ * Follows [Material Design 3 menus](https://m3.material.io/components/menus/specs): container
+ * `corner.large`, fill `surfaceContainerLow` (elevation controls shadow only), item label
+ * `labelLarge`, selected items use `tertiaryContainer` / `onTertiaryContainer`.
+ *
  * ## Usage
  * ```js
  * import * as React from 'react';
@@ -157,10 +171,24 @@ const isBrowser = () => Platform.OS === 'web' && 'document' in global;
  *           visible={visible}
  *           onDismiss={closeMenu}
  *           anchor={<Button onPress={openMenu}>Show menu</Button>}>
- *           <Menu.Item onPress={() => {}} title="Item 1" />
- *           <Menu.Item onPress={() => {}} title="Item 2" />
+ *           <Menu.Item
+ *             leadingIcon="content-paste"
+ *             onPress={() => {}}
+ *             title="Paste"
+ *             supportingText="Insert clipboard"
+ *             trailingSupportingText="⌘V"
+ *             selected
+ *           />
+ *           <Menu.Item onPress={() => {}} title="Undo" />
  *           <Divider />
- *           <Menu.Item onPress={() => {}} title="Item 3" />
+ *           <Menu.Item onPress={() => {}} title="Share" dense />
+ *         </Menu>
+ *         <Menu
+ *           visible={false}
+ *           onDismiss={() => {}}
+ *           colorScheme="vibrant"
+ *           anchor={<Button onPress={() => {}}>Vibrant</Button>}>
+ *           <Menu.Item onPress={() => {}} title="Featured" selected />
  *         </Menu>
  *       </View>
  *     </PaperProvider>
@@ -188,13 +216,14 @@ const Menu = ({
   style,
   elevation = DEFAULT_ELEVATION,
   mode = DEFAULT_MODE,
+  colorScheme = 'standard',
   children,
   theme: themeOverrides,
   keyboardShouldPersistTaps,
 }: Props) => {
   const theme = useInternalTheme(themeOverrides);
   const { direction } = useLocale();
-  const { colors: md3Colors } = theme as Theme;
+  const reduceMotion = useReduceMotion();
   const insets = useSafeAreaInsets();
   const [rendered, setRendered] = React.useState(visible);
   const [left, setLeft] = React.useState(0);
@@ -345,44 +374,42 @@ const Menu = ({
 
     attachListeners();
     requestAnimationFrame(() => {
-      const { animation } = theme;
-      Animated.parallel([
-        Animated.timing(scaleAnimationRef.current, {
-          toValue: { x: menuLayoutResult.width, y: menuLayoutResult.height },
-          duration: ANIMATION_DURATION * animation.scale,
-          easing: EASING,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacityAnimationRef.current, {
-          toValue: 1,
-          duration: ANIMATION_DURATION * animation.scale,
-          easing: EASING,
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
+      const finish = () => {
         focusFirstDOMNode(menuRef.current);
         prevRendered.current = true;
+      };
+
+      // M3 spring motion (spatial for scale, effects for opacity), or snap
+      // under reduce-motion. Shared helper so unit tests drive the real path.
+      runMenuOpenMotion({
+        reduceMotion,
+        scaleAnimation: scaleAnimationRef.current,
+        opacityAnimation: opacityAnimationRef.current,
+        menuWidth: menuLayoutResult.width,
+        menuHeight: menuLayoutResult.height,
+        theme: theme as Theme,
+        onFinish: finish,
       });
     });
-  }, [anchor, attachListeners, measureAnchorLayout, theme]);
+  }, [anchor, attachListeners, measureAnchorLayout, reduceMotion, theme]);
 
   const hide = React.useCallback(() => {
     removeListeners();
 
-    const { animation } = theme;
-
-    Animated.timing(opacityAnimationRef.current, {
-      toValue: 0,
-      duration: ANIMATION_DURATION * animation.scale,
-      easing: EASING,
-      useNativeDriver: true,
-    }).start(() => {
+    const finish = () => {
       setMenuLayout({ width: 0, height: 0 });
       setRendered(false);
       prevRendered.current = false;
       focusFirstDOMNode(anchorRef.current);
+    };
+
+    runMenuCloseMotion({
+      reduceMotion,
+      opacityAnimation: opacityAnimationRef.current,
+      theme: theme as Theme,
+      onFinish: finish,
     });
-  }, [removeListeners, theme]);
+  }, [reduceMotion, removeListeners, theme]);
 
   const updateVisibility = React.useCallback(
     async (display: boolean) => {
@@ -614,7 +641,7 @@ const Menu = ({
         }),
       },
     ],
-    borderRadius: theme.shapes.corner.extraSmall,
+    borderRadius: getMenuContainerBorderRadius(theme),
     ...(scrollableMenuHeight ? { height: scrollableMenuHeight } : {}),
   };
 
@@ -628,6 +655,22 @@ const Menu = ({
   };
 
   const pointerEvents = visible ? 'box-none' : 'none';
+
+  // Parent-owned layout context (no cloneElement). Type identity only for
+  // first/last detection — no displayName filtering. Wrappers keep working
+  // via explicit roundedTop/roundedBottom/colorScheme props.
+  const renderedChildren = composeMenuChildren({
+    children,
+    colorScheme,
+  });
+
+  const rootContext = React.useMemo(() => ({ colorScheme }), [colorScheme]);
+
+  const surfaceBackground = getMenuContainerColor({
+    theme: theme as Theme,
+    elevation,
+    colorScheme,
+  });
 
   return (
     <View
@@ -670,7 +713,8 @@ const Menu = ({
                   styles.shadowMenuContainer,
                   shadowMenuContainerStyle,
                   {
-                    backgroundColor: md3Colors.elevation[`level${elevation}`],
+                    backgroundColor: surfaceBackground,
+                    paddingVertical: MenuTokens.sizes.containerPaddingVertical,
                   },
                   contentStyle,
                 ]}
@@ -679,13 +723,15 @@ const Menu = ({
                 theme={theme}
                 container
               >
-                {(scrollableMenuHeight && (
-                  <ScrollView
-                    keyboardShouldPersistTaps={keyboardShouldPersistTaps}
-                  >
-                    {children}
-                  </ScrollView>
-                )) || <React.Fragment>{children}</React.Fragment>}
+                <MenuRootContext.Provider value={rootContext}>
+                  {(scrollableMenuHeight && (
+                    <ScrollView
+                      keyboardShouldPersistTaps={keyboardShouldPersistTaps}
+                    >
+                      {renderedChildren}
+                    </ScrollView>
+                  )) || <React.Fragment>{renderedChildren}</React.Fragment>}
+                </MenuRootContext.Provider>
               </Surface>
             </Animated.View>
           </View>
@@ -703,7 +749,6 @@ const styles = StyleSheet.create({
   },
   shadowMenuContainer: {
     opacity: 0,
-    paddingVertical: 8,
   },
   pressableOverlay: {
     ...Platform.select({
